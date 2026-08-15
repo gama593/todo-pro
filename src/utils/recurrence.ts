@@ -1,74 +1,67 @@
-export type RecurrenceFreq = "daily" | "weekly" | "monthly" | "yearly";
+import type { RecurrenceRule } from "../types/task";
 
-export interface RecurrenceRule {
-    freq: RecurrenceFreq;
-    interval?: number; // default 1
-    weekdays?: number[]; // 0-6 for Sun-Sat (used with weekly)
-    count?: number;
-    until?: string; // ISO date
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
-function addDays(d: Date, days: number) {
-    const n = new Date(d);
-    n.setDate(n.getDate() + days);
-    return n;
+function addMonthsClamped(date: Date, months: number): Date {
+  const next = new Date(date);
+  const day = next.getDate();
+  next.setDate(1);
+  next.setMonth(next.getMonth() + months);
+  const lastDay = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+  next.setDate(Math.min(day, lastDay));
+  return next;
 }
 
-function addMonths(d: Date, months: number) {
-    const n = new Date(d);
-    const day = n.getDate();
-    n.setMonth(n.getMonth() + months);
-    // handle end-of-month rollover
-    if (n.getDate() < day) {
-        n.setDate(0);
-    }
-    return n;
+function addYearsClamped(date: Date, years: number): Date {
+  const next = new Date(date);
+  const month = next.getMonth();
+  const day = next.getDate();
+  next.setDate(1);
+  next.setFullYear(next.getFullYear() + years);
+  next.setMonth(month);
+  const lastDay = new Date(next.getFullYear(), month + 1, 0).getDate();
+  next.setDate(Math.min(day, lastDay));
+  return next;
 }
 
 export function computeNextDate(fromIso: string | undefined, rule: RecurrenceRule): string | null {
-    const interval = rule.interval || 1;
-    const from = fromIso ? new Date(fromIso) : new Date();
-    let next: Date | null = null;
+  const from = fromIso ? new Date(fromIso) : new Date();
+  if (Number.isNaN(from.getTime())) return null;
 
-    switch (rule.freq) {
-        case "daily":
-            next = addDays(from, interval);
-            break;
+  const interval = Math.max(1, rule.interval || 1);
+  let next: Date;
 
-        case "weekly":
-            if (rule.weekdays && rule.weekdays.length > 0) {
-                // find next weekday in list
-                const sorted = [...rule.weekdays].sort();
-                for (let i = 1; i <= 7; i++) {
-                    const cand = addDays(from, i);
-                    if (sorted.includes(cand.getDay())) {
-                        next = cand;
-                        break;
-                    }
-                }
-                if (!next) next = addDays(from, 7 * interval);
-            } else {
-                next = addDays(from, 7 * interval);
-            }
-            break;
-
-        case "monthly":
-            next = addMonths(from, interval);
-            break;
-
-        case "yearly":
-            next = new Date(from.getFullYear() + interval, from.getMonth(), from.getDate());
-            break;
-
-        default:
-            next = null;
+  switch (rule.freq) {
+    case "daily":
+      next = addDays(from, interval);
+      break;
+    case "weekly": {
+      const weekdays = [...new Set(rule.weekdays ?? [])].filter((day) => day >= 0 && day <= 6).sort((a, b) => a - b);
+      if (!weekdays.length) {
+        next = addDays(from, 7 * interval);
+        break;
+      }
+      const current = from.getDay();
+      const following = weekdays.find((day) => day > current);
+      next = following !== undefined
+        ? addDays(from, following - current)
+        : addDays(from, (7 - current) + weekdays[0] + 7 * (interval - 1));
+      break;
     }
+    case "monthly":
+      next = addMonthsClamped(from, interval);
+      break;
+    case "yearly":
+      next = addYearsClamped(from, interval);
+      break;
+    default:
+      return null;
+  }
 
-    if (!next) return null;
-    if (rule.until) {
-        const until = new Date(rule.until);
-        if (next > until) return null;
-    }
-
-    return next.toISOString();
+  if (rule.endDate && next > new Date(rule.endDate)) return null;
+  return next.toISOString();
 }
